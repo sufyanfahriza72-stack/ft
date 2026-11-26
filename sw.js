@@ -1,4 +1,4 @@
-const CACHE_NAME = 'musafa-mobile-vscode-v1';
+const CACHE_NAME = 'musafa-mobile-vscode-fix-v2';
 const ASSETS_TO_CACHE = [
   './',
   './index.html',

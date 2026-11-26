@@ -23,7 +23,6 @@ async function callBackend(action, payload = {}, method = 'POST') {
     const query = new URLSearchParams({ action, ...payload }).toString();
     url = `${SCRIPT_URL}?${query}`;
   } else {
-    // Menggunakan text/plain agar tidak memicu CORS preflight yang ditolak Apps Script
     options.headers = { 'Content-Type': 'text/plain;charset=utf-8' };
     options.body = JSON.stringify({ action, ...payload });
   }
@@ -46,6 +45,7 @@ window.addEventListener('DOMContentLoaded', () => {
   startLiveClock();
   setInterval(updateCountdown, 1000);
   setInterval(checkDeadlinesAndAlarms, 15000);
+  initTugasDetailUI();
 });
 
 window.addEventListener('beforeinstallprompt', (e) => {
@@ -388,7 +388,7 @@ function renderSelectedDateItems() {
     html += `<div class="p-2 rounded-lg bg-emerald-500/10 border border-emerald-500/30"><strong>[Agenda]</strong> ${a.Judul} (${timePart})</div>`;
   });
   tugases.forEach(t => {
-    html += `<div class="p-2 rounded-lg bg-rose-500/10 border border-rose-500/30"><strong>[Tugas ${t.MataPelajaran}]</strong> ${t.DetailTugas}</div>`;
+    html += `<div class="p-2 rounded-lg bg-rose-500/10 border border-rose-500/30"><strong>[Tugas ${t.MataPelajaran}]</strong> ${getTaskDisplayName(t)}</div>`;
   });
   box.innerHTML = html;
 }
@@ -492,6 +492,207 @@ function renderJadwalPelajaranDanUjian() {
   bannerBox.innerHTML = bannersHtml;
 }
 
+// ==================== TUGAS (DESKRIPSI, FOTO, PDF, LINK GDRIVE) ====================
+function initTugasDetailUI() {
+  const fotoInput = document.getElementById('tugas-file-foto');
+  const pdfInput = document.getElementById('tugas-file-pdf');
+  const driveInput = document.getElementById('tugas-link-drive');
+  const descInput = document.getElementById('tugas-detail-deskripsi');
+
+  if (fotoInput) {
+    fotoInput.addEventListener('change', (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) {
+        document.getElementById('tugas-foto-data').value = '';
+        document.getElementById('tugas-foto-name').value = '';
+        renderTugasAttachmentPreview();
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        document.getElementById('tugas-foto-data').value = reader.result || '';
+        document.getElementById('tugas-foto-name').value = file.name;
+        renderTugasAttachmentPreview();
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  if (pdfInput) {
+    pdfInput.addEventListener('change', (e) => {
+      const file = e.target.files && e.target.files[0];
+      if (!file) {
+        document.getElementById('tugas-pdf-data').value = '';
+        document.getElementById('tugas-pdf-name').value = '';
+        renderTugasAttachmentPreview();
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        document.getElementById('tugas-pdf-data').value = reader.result || '';
+        document.getElementById('tugas-pdf-name').value = file.name;
+        renderTugasAttachmentPreview();
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  if (driveInput) {
+    driveInput.addEventListener('input', renderTugasAttachmentPreview);
+  }
+  if (descInput) {
+    descInput.addEventListener('input', renderTugasAttachmentPreview);
+  }
+}
+
+function toggleTugasDetailMode() {
+  const mode = document.getElementById('tugas-tipe-detail').value;
+  document.getElementById('tugas-box-deskripsi').classList.toggle('hidden', mode !== 'deskripsi' && mode !== 'semua');
+  document.getElementById('tugas-box-foto').classList.toggle('hidden', mode !== 'foto' && mode !== 'semua');
+  document.getElementById('tugas-box-pdf').classList.toggle('hidden', mode !== 'pdf' && mode !== 'semua');
+  document.getElementById('tugas-box-drive').classList.toggle('hidden', mode !== 'drive' && mode !== 'semua');
+  renderTugasAttachmentPreview();
+}
+
+function renderTugasAttachmentPreview() {
+  const box = document.getElementById('tugas-lampiran-preview');
+  if (!box) return;
+
+  const desc = (document.getElementById('tugas-detail-deskripsi')?.value || '').trim();
+  const fotoData = document.getElementById('tugas-foto-data')?.value || '';
+  const fotoName = document.getElementById('tugas-foto-name')?.value || 'Foto Tugas';
+  const pdfData = document.getElementById('tugas-pdf-data')?.value || '';
+  const pdfName = document.getElementById('tugas-pdf-name')?.value || 'Dokumen Tugas.pdf';
+  const driveLink = (document.getElementById('tugas-link-drive')?.value || '').trim();
+
+  const parts = [];
+  if (desc) parts.push(`<div class="text-xs font-semibold text-slate-700 dark:text-slate-200">${escapeHtml_(desc)}</div>`);
+  if (fotoData) {
+    parts.push(`<div class="flex items-center gap-2 mt-1"><img src="${fotoData}" alt="${escapeHtml_(fotoName)}" class="w-14 h-14 object-cover rounded-lg border border-slate-300 dark:border-slate-700"><span class="text-[11px] font-medium">${escapeHtml_(fotoName)}</span></div>`);
+  }
+  if (pdfData || pdfName) {
+    parts.push(`<div class="text-[11px] font-semibold text-rose-600 dark:text-rose-400 mt-1"><i class="fa-solid fa-file-pdf mr-1"></i>PDF: ${escapeHtml_(pdfName)}</div>`);
+  }
+  if (driveLink) {
+    parts.push(`<div class="text-[11px] font-semibold text-blue-600 dark:text-blue-400 mt-1 break-all"><i class="fa-brands fa-google-drive mr-1"></i>Drive: ${escapeHtml_(driveLink)}</div>`);
+  }
+
+  if (parts.length === 0) {
+    box.innerHTML = '<span class="text-[11px] text-slate-400 italic">Belum ada lampiran/deskripsi yang dipilih.</span>';
+  } else {
+    box.innerHTML = parts.join('');
+  }
+}
+
+function parseTugasDetail(rawDetail) {
+  const text = String(rawDetail || '').trim();
+  if (!text) return { deskripsi: '', fotoData: '', fotoName: '', pdfData: '', pdfName: '', driveLink: '' };
+
+  if (text.startsWith('{') && text.endsWith('}')) {
+    try {
+      const parsed = JSON.parse(text);
+      if (parsed && typeof parsed === 'object') {
+        return {
+          deskripsi: parsed.deskripsi || '',
+          fotoData: parsed.fotoData || '',
+          fotoName: parsed.fotoName || '',
+          pdfData: parsed.pdfData || '',
+          pdfName: parsed.pdfName || '',
+          driveLink: parsed.driveLink || ''
+        };
+      }
+    } catch (e) {}
+  }
+
+  const lines = text.split('\n');
+  let deskripsi = [];
+  let fotoData = '';
+  let fotoName = '';
+  let pdfData = '';
+  let pdfName = '';
+  let driveLink = '';
+
+  lines.forEach(line => {
+    const trimmed = line.trim();
+    if (trimmed.startsWith('[FOTO_DATA:')) {
+      const idx = trimmed.indexOf(']:');
+      if (idx !== -1) {
+        fotoName = trimmed.slice(11, idx);
+        fotoData = trimmed.slice(idx + 2).trim();
+      }
+    } else if (trimmed.startsWith('[FOTO:')) {
+      fotoName = trimmed.slice(6, -1).trim();
+    } else if (trimmed.startsWith('[PDF_DATA:')) {
+      const idx = trimmed.indexOf(']:');
+      if (idx !== -1) {
+        pdfName = trimmed.slice(10, idx);
+        pdfData = trimmed.slice(idx + 2).trim();
+      }
+    } else if (trimmed.startsWith('[PDF:')) {
+      pdfName = trimmed.slice(5, -1).trim();
+    } else if (trimmed.startsWith('[DRIVE:')) {
+      driveLink = trimmed.slice(7, -1).trim();
+    } else if (/^https?:\/\/(drive|docs)\.google\.com\//i.test(trimmed) && !driveLink) {
+      driveLink = trimmed;
+    } else {
+      deskripsi.push(line);
+    }
+  });
+
+  return {
+    deskripsi: deskripsi.join('\n').trim(),
+    fotoData,
+    fotoName,
+    pdfData,
+    pdfName,
+    driveLink
+  };
+}
+
+function buildTugasDetailPayload() {
+  const deskripsi = (document.getElementById('tugas-detail-deskripsi')?.value || '').trim();
+  const fotoData = document.getElementById('tugas-foto-data')?.value || '';
+  const fotoName = (document.getElementById('tugas-foto-name')?.value || '').trim();
+  const pdfData = document.getElementById('tugas-pdf-data')?.value || '';
+  const pdfName = (document.getElementById('tugas-pdf-name')?.value || '').trim();
+  const driveLink = (document.getElementById('tugas-link-drive')?.value || '').trim();
+
+  const segments = [];
+  if (deskripsi) segments.push(deskripsi);
+  if (fotoName) segments.push(`[FOTO: ${fotoName}]`);
+  if (fotoData) segments.push(`[FOTO_DATA:${fotoName || 'foto.png'}]:${fotoData}`);
+  if (pdfName) segments.push(`[PDF: ${pdfName}]`);
+  if (pdfData) segments.push(`[PDF_DATA:${pdfName || 'tugas.pdf'}]:${pdfData}`);
+  if (driveLink) segments.push(`[DRIVE: ${driveLink}]`);
+
+  return segments.join('\n');
+}
+
+function renderTugasDetailRichHtml(rawDetail) {
+  const info = parseTugasDetail(rawDetail);
+  const blocks = [];
+
+  if (info.deskripsi) {
+    blocks.push(`<p class="text-xs font-semibold whitespace-pre-wrap break-words">${escapeHtml_(info.deskripsi)}</p>`);
+  }
+  if (info.fotoData) {
+    blocks.push(`<div class="mt-1.5"><img src="${info.fotoData}" alt="${escapeHtml_(info.fotoName || 'Foto Tugas')}" class="max-h-36 rounded-lg border border-slate-300 dark:border-slate-700 object-contain bg-white"></div>`);
+  } else if (info.fotoName) {
+    blocks.push(`<div class="mt-1 text-[11px] text-slate-600 dark:text-slate-300"><i class="fa-solid fa-image mr-1 text-emerald-600"></i>Foto: ${escapeHtml_(info.fotoName)}</div>`);
+  }
+  if (info.pdfData) {
+    blocks.push(`<div class="mt-1"><a href="${info.pdfData}" download="${escapeHtml_(info.pdfName || 'Tugas.pdf')}" class="inline-flex items-center gap-1 text-[11px] font-bold text-rose-600 dark:text-rose-400 underline"><i class="fa-solid fa-file-pdf"></i> Unduh PDF: ${escapeHtml_(info.pdfName || 'Tugas.pdf')}</a></div>`);
+  } else if (info.pdfName) {
+    blocks.push(`<div class="mt-1 text-[11px] font-semibold text-rose-600 dark:text-rose-400"><i class="fa-solid fa-file-pdf mr-1"></i>PDF: ${escapeHtml_(info.pdfName)}</div>`);
+  }
+  if (info.driveLink) {
+    const safeUrl = /^https?:\/\//i.test(info.driveLink) ? info.driveLink : `https://${info.driveLink}`;
+    blocks.push(`<div class="mt-1"><a href="${escapeHtml_(safeUrl)}" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1 text-[11px] font-bold text-blue-600 dark:text-blue-400 underline break-all"><i class="fa-brands fa-google-drive"></i> Buka Link Google Drive</a></div>`);
+  }
+
+  return blocks.length ? blocks.join('') : '<span class="text-xs text-slate-400 italic">-</span>';
+}
+
 function renderDashboardTugas() {
   const box = document.getElementById('dashboard-tugas-list');
   const sorted = [...appData.tugas].sort((a, b) => new Date(String(a.Deadline).replace(' ', 'T')) - new Date(String(b.Deadline).replace(' ', 'T')));
@@ -500,13 +701,13 @@ function renderDashboardTugas() {
     return;
   }
   box.innerHTML = sorted.map(t => `
-    <div class="p-3 rounded-xl border border-rose-200 dark:border-rose-900/40 bg-rose-50/50 dark:bg-rose-950/20">
-      <div class="flex justify-between items-center text-[11px] font-bold text-rose-600 dark:text-rose-400 mb-1">
-        <span>${t.MataPelajaran || '-'}</span>
-        <span><i class="fa-solid fa-hourglass-half"></i> ${String(t.Deadline || '').replace('T', ' ')}</span>
+    <div class="p-3 rounded-xl border border-rose-200 dark:border-rose-900/40 bg-rose-50/50 dark:bg-rose-950/20 space-y-1">
+      <div class="flex justify-between items-center text-[11px] font-bold text-rose-600 dark:text-rose-400">
+        <span>${escapeHtml_(t.MataPelajaran || t.NamaMapel || '-')}</span>
+        <span><i class="fa-solid fa-hourglass-half"></i> ${escapeHtml_(String(t.Deadline || '').replace('T', ' '))}</span>
       </div>
-      <p class="text-xs font-semibold">${t.DetailTugas || '-'}</p>
-      <p class="text-[11px] text-slate-500 mt-0.5">Guru: ${t.GuruMapel || '-'}</p>
+      ${renderTugasDetailRichHtml(t.DetailTugas)}
+      <p class="text-[11px] text-slate-500 pt-0.5">Guru: ${escapeHtml_(t.GuruMapel || t.NamaGuru || '-')}</p>
     </div>
   `).join('');
 }
@@ -621,12 +822,17 @@ function submitUjian(e) {
 
 function submitTugas(e) {
   e.preventDefault();
+  const detailPayload = buildTugasDetailPayload();
+  if (!detailPayload) {
+    alert('Harap isi minimal salah satu Detail Tugas: Deskripsi, Foto, PDF, atau Link Google Drive.');
+    return;
+  }
   const rec = {
     ID: document.getElementById('tugas-id').value,
     Deadline: document.getElementById('tugas-deadline').value,
     NamaMapel: document.getElementById('tugas-mapel').value,
     NamaGuru: document.getElementById('tugas-guru').value,
-    DetailTugas: document.getElementById('tugas-detail').value
+    DetailTugas: detailPayload
   };
   saveToSheet('Tugas', rec, 'form-tugas', 'tugas-id');
 }
@@ -658,17 +864,84 @@ function resetForm(formId, idField) {
   document.getElementById(formId).reset();
   document.getElementById(idField).value = '';
   if (formId === 'form-agenda') toggleDisposisiField();
+  if (formId === 'form-tugas') {
+    ['tugas-foto-data', 'tugas-foto-name', 'tugas-pdf-data', 'tugas-pdf-name'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) el.value = '';
+    });
+    const modeEl = document.getElementById('tugas-tipe-detail');
+    if (modeEl) modeEl.value = 'semua';
+    toggleTugasDetailMode();
+  }
+}
+
+function editAgenda(a) {
+  switchTab('agenda');
+  document.getElementById('agenda-id').value = a.ID || '';
+  document.getElementById('agenda-judul').value = a.Judul || '';
+  document.getElementById('agenda-lokasi').value = a.Lokasi || '';
+  document.getElementById('agenda-jatuhtempo').value = a.JatuhTempo || '';
+  document.getElementById('agenda-durasi').value = a.Durasi || 'Sesuai Jam';
+  document.getElementById('agenda-prioritas').value = a.Prioritas || 'DINAS';
+  document.getElementById('agenda-status').value = a.Status || 'Agendakan';
+  document.getElementById('agenda-disposisi').value = a.DisposisiKepada || '';
+  document.getElementById('agenda-tamu').value = a.TamuKhusus || '';
+  toggleDisposisiField();
+}
+
+function editPelajaran(p) {
+  switchTab('pelajaran');
+  document.getElementById('pelajaran-id').value = p.ID || '';
+  document.getElementById('pelajaran-mapel').value = p.MataPelajaran || p.NamaMapel || '';
+  document.getElementById('pelajaran-guru').value = p.GuruMapel || p.NamaGuru || '';
+  document.getElementById('pelajaran-hari').value = p.Hari || 'Senin';
+  document.getElementById('pelajaran-waktu').value = p.Waktu || '';
+}
+
+function editUjian(u) {
+  switchTab('ujian');
+  document.getElementById('ujian-id').value = u.ID || '';
+  document.getElementById('ujian-hari').value = u.Hari || 'Senin';
+  document.getElementById('ujian-jam').value = u.Jam || '';
+  document.getElementById('ujian-mapel').value = u.MataPelajaran || u.NamaMapel || '';
+  document.getElementById('ujian-status').value = u.StatusAktif || 'Non Aktif';
+}
+
+function editTugasById(id) {
+  const t = (appData.tugas || []).find(item => String(item.ID) === String(id));
+  if (!t) return;
+  editTugas(t);
+}
+
+function editTugas(t) {
+  switchTab('tugas');
+  const parsed = parseTugasDetail(t.DetailTugas);
+  document.getElementById('tugas-id').value = t.ID || '';
+  document.getElementById('tugas-deadline').value = t.Deadline || '';
+  document.getElementById('tugas-mapel').value = t.MataPelajaran || t.NamaMapel || '';
+  document.getElementById('tugas-guru').value = t.GuruMapel || t.NamaGuru || '';
+  document.getElementById('tugas-detail-deskripsi').value = parsed.deskripsi || '';
+  document.getElementById('tugas-foto-data').value = parsed.fotoData || '';
+  document.getElementById('tugas-foto-name').value = parsed.fotoName || '';
+  document.getElementById('tugas-pdf-data').value = parsed.pdfData || '';
+  document.getElementById('tugas-pdf-name').value = parsed.pdfName || '';
+  document.getElementById('tugas-link-drive').value = parsed.driveLink || '';
+
+  const modeEl = document.getElementById('tugas-tipe-detail');
+  if (modeEl) modeEl.value = 'semua';
+  toggleTugasDetailMode();
+  document.getElementById('form-tugas').scrollIntoView({ behavior: 'smooth', block: 'start' });
 }
 
 function renderAdminTables() {
   document.getElementById('table-agenda').innerHTML = appData.agenda.map(a => `
     <tr class="border-b border-slate-100 dark:border-slate-800">
-      <td class="p-2 font-bold">${a.Judul || ''}</td>
-      <td class="p-2">${a.Lokasi || ''}</td>
-      <td class="p-2">${String(a.JatuhTempo || '').replace('T',' ')}</td>
-      <td class="p-2 font-bold">${a.Prioritas || ''}</td>
-      <td class="p-2">${a.Status || ''}</td>
-      <td class="p-2">${a.TamuKhusus || '-'}</td>
+      <td class="p-2 font-bold">${escapeHtml_(a.Judul || '')}</td>
+      <td class="p-2">${escapeHtml_(a.Lokasi || '')}</td>
+      <td class="p-2">${escapeHtml_(String(a.JatuhTempo || '').replace('T',' '))}</td>
+      <td class="p-2 font-bold">${escapeHtml_(a.Prioritas || '')}</td>
+      <td class="p-2">${escapeHtml_(a.Status || '')}</td>
+      <td class="p-2">${escapeHtml_(a.TamuKhusus || '-')}</td>
       <td class="p-2 flex gap-1">
         <button onclick='editAgenda(${JSON.stringify(a)})' class="px-2 py-1 bg-amber-500 text-white rounded">Edit</button>
         <button onclick="deleteFromSheet('Agenda','${a.ID}')" class="px-2 py-1 bg-rose-600 text-white rounded">Hapus</button>
@@ -678,10 +951,10 @@ function renderAdminTables() {
 
   document.getElementById('table-pelajaran').innerHTML = appData.pelajaran.map(p => `
     <tr class="border-b border-slate-100 dark:border-slate-800">
-      <td class="p-2">${p.Hari || ''}</td>
-      <td class="p-2">${p.Waktu || ''}</td>
-      <td class="p-2 font-bold">${p.MataPelajaran || p.NamaMapel || ''}</td>
-      <td class="p-2">${p.GuruMapel || p.NamaGuru || ''}</td>
+      <td class="p-2">${escapeHtml_(p.Hari || '')}</td>
+      <td class="p-2">${escapeHtml_(p.Waktu || '')}</td>
+      <td class="p-2 font-bold">${escapeHtml_(p.MataPelajaran || p.NamaMapel || '')}</td>
+      <td class="p-2">${escapeHtml_(p.GuruMapel || p.NamaGuru || '')}</td>
       <td class="p-2 flex gap-1">
         <button onclick='editPelajaran(${JSON.stringify(p)})' class="px-2 py-1 bg-amber-500 text-white rounded">Edit</button>
         <button onclick="deleteFromSheet('Pelajaran','${p.ID}')" class="px-2 py-1 bg-rose-600 text-white rounded">Hapus</button>
@@ -691,10 +964,10 @@ function renderAdminTables() {
 
   document.getElementById('table-ujian').innerHTML = appData.ujian.map(u => `
     <tr class="border-b border-slate-100 dark:border-slate-800">
-      <td class="p-2">${u.Hari || ''}</td>
-      <td class="p-2">${u.Jam || ''}</td>
-      <td class="p-2 font-bold">${u.MataPelajaran || u.NamaMapel || ''}</td>
-      <td class="p-2"><span class="px-2 py-0.5 rounded font-bold ${u.StatusAktif==='Aktif'?'bg-emerald-500/20 text-emerald-500':'bg-slate-500/20 text-slate-400'}">${u.StatusAktif || ''}</span></td>
+      <td class="p-2">${escapeHtml_(u.Hari || '')}</td>
+      <td class="p-2">${escapeHtml_(u.Jam || '')}</td>
+      <td class="p-2 font-bold">${escapeHtml_(u.MataPelajaran || u.NamaMapel || '')}</td>
+      <td class="p-2"><span class="px-2 py-0.5 rounded font-bold ${u.StatusAktif==='Aktif'?'bg-emerald-500/20 text-emerald-500':'bg-slate-500/20 text-slate-400'}">${escapeHtml_(u.StatusAktif || '')}</span></td>
       <td class="p-2 flex gap-1">
         <button onclick='editUjian(${JSON.stringify(u)})' class="px-2 py-1 bg-amber-500 text-white rounded">Edit</button>
         <button onclick="deleteFromSheet('Ujian','${u.ID}')" class="px-2 py-1 bg-rose-600 text-white rounded">Hapus</button>
@@ -703,14 +976,16 @@ function renderAdminTables() {
   `).join('');
 
   document.getElementById('table-tugas').innerHTML = appData.tugas.map(t => `
-    <tr class="border-b border-slate-100 dark:border-slate-800">
-      <td class="p-2">${String(t.Deadline || '').replace('T',' ')}</td>
-      <td class="p-2 font-bold">${t.MataPelajaran || t.NamaMapel || ''}</td>
-      <td class="p-2">${t.GuruMapel || t.NamaGuru || ''}</td>
-      <td class="p-2">${t.DetailTugas || ''}</td>
-      <td class="p-2 flex gap-1">
-        <button onclick='editTugas(${JSON.stringify(t)})' class="px-2 py-1 bg-amber-500 text-white rounded">Edit</button>
-        <button onclick="deleteFromSheet('Tugas','${t.ID}')" class="px-2 py-1 bg-rose-600 text-white rounded">Hapus</button>
+    <tr class="border-b border-slate-100 dark:border-slate-800 align-top">
+      <td class="p-2 whitespace-nowrap">${escapeHtml_(String(t.Deadline || '').replace('T',' '))}</td>
+      <td class="p-2 font-bold">${escapeHtml_(t.MataPelajaran || t.NamaMapel || '')}</td>
+      <td class="p-2">${escapeHtml_(t.GuruMapel || t.NamaGuru || '')}</td>
+      <td class="p-2 max-w-md">${renderTugasDetailRichHtml(t.DetailTugas)}</td>
+      <td class="p-2">
+        <div class="flex gap-1">
+          <button type="button" onclick="editTugasById('${escapeHtml_(String(t.ID || ''))}')" class="px-2 py-1 bg-amber-500 hover:bg-amber-600 text-white rounded font-bold">Edit</button>
+          <button type="button" onclick="deleteFromSheet('Tugas','${escapeHtml_(String(t.ID || ''))}')" class="px-2 py-1 bg-rose-600 hover:bg-rose-700 text-white rounded font-bold">Hapus</button>
+        </div>
       </td>
     </tr>
   `).join('');
@@ -735,14 +1010,14 @@ function renderSavedNotulensi() {
       <div class="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-800/40 space-y-2">
         <div class="flex items-start justify-between gap-2">
           <div>
-            <h4 class="font-bold text-sm text-blue-700 dark:text-blue-400">${title}</h4>
-            <p class="text-[11px] text-slate-500">${dateStr} • Token: <span class="font-mono font-bold">${tokenStr}</span></p>
+            <h4 class="font-bold text-sm text-blue-700 dark:text-blue-400">${escapeHtml_(title)}</h4>
+            <p class="text-[11px] text-slate-500">${escapeHtml_(dateStr)} • Token: <span class="font-mono font-bold">${escapeHtml_(tokenStr)}</span></p>
           </div>
           <button onclick="openNoteInTTE(${idx})" class="px-3 py-1.5 bg-blue-700 hover:bg-blue-800 text-white rounded-lg text-[11px] font-bold shrink-0">
             <i class="fa-solid fa-signature mr-1"></i> TTE & PDF
           </button>
         </div>
-        <pre class="text-xs whitespace-pre-wrap font-sans text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-900 p-3 rounded-lg border border-slate-200 dark:border-slate-800 max-h-40 overflow-y-auto">${content}</pre>
+        <pre class="text-xs whitespace-pre-wrap font-sans text-slate-700 dark:text-slate-300 bg-white dark:bg-slate-900 p-3 rounded-lg border border-slate-200 dark:border-slate-800 max-h-40 overflow-y-auto">${escapeHtml_(content)}</pre>
       </div>
     `;
   }).join('');
@@ -768,7 +1043,7 @@ async function saveNoteOnly() {
 
 function goToTTEWithCurrentNote() {
   document.getElementById('tte-doc-judul').value = document.getElementById('notulen-judul').value;
-  document.getElementById('tte-doc-tanggal').value = document.getElementById('notulen-tanggal').value || new Date().toLocaleDateString('id-ID');
+  document.getElementById('tte-doc-tanggal').value = document.getElementById('notulen-tanggal').value || formatDocTimestamp_(new Date());
   document.getElementById('tte-doc-isi').value = document.getElementById('notulen-isi').value;
   switchTab('tte');
 }
@@ -777,12 +1052,111 @@ function openNoteInTTE(index) {
   const n = (appData.notulensi || [])[index];
   if (!n) return;
   document.getElementById('tte-doc-judul').value = n.Judul || n.JudulRapat || '';
-  document.getElementById('tte-doc-tanggal').value = n.Tanggal || '';
+  document.getElementById('tte-doc-tanggal').value = n.Tanggal || formatDocTimestamp_(new Date());
   document.getElementById('tte-doc-isi').value = n.Isi || n.IsiNotulensi || '';
   if (n.TokenTTE) {
     document.getElementById('page-tte-token-input').value = n.TokenTTE;
   }
   switchTab('tte');
+}
+
+function escapeHtml_(str) {
+  return String(str || '')
+    .replace(/&/g, '&')
+    .replace(/</g, '<')
+    .replace(/>/g, '>')
+    .replace(/"/g, '"');
+}
+
+function formatInlineBold_(text) {
+  return escapeHtml_(text).replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+}
+
+function renderNotulensiBodyHtml_(rawText) {
+  const lines = String(rawText || '').replace(/\r\n/g, '\n').split('\n');
+  const html = [];
+  let inList = false;
+
+  const closeList = () => {
+    if (inList) {
+      html.push('</ul>');
+      inList = false;
+    }
+  };
+
+  for (const rawLine of lines) {
+    const line = rawLine.trim();
+    if (!line) {
+      closeList();
+      html.push('<div style="height: 6px;"></div>');
+      continue;
+    }
+
+    if (/^#\s+/.test(line)) {
+      closeList();
+      html.push(`<div style="font-size: 14px; font-weight: 800; color: #0f172a; margin: 10px 0 4px; border-bottom: 1px solid #cbd5e1; padding-bottom: 2px;">${formatInlineBold_(line.replace(/^#\s+/, ''))}</div>`);
+    } else if (/^##\s+/.test(line)) {
+      closeList();
+      html.push(`<div style="font-size: 13px; font-weight: 800; color: #1e3a8a; margin: 8px 0 3px;">${formatInlineBold_(line.replace(/^##\s+/, ''))}</div>`);
+    } else if (/^###\s+/.test(line)) {
+      closeList();
+      html.push(`<div style="font-size: 12px; font-weight: 700; color: #0f172a; margin: 6px 0 2px;">${formatInlineBold_(line.replace(/^###\s+/, ''))}</div>`);
+    } else if (/^[-*•]\s+/.test(line)) {
+      if (!inList) {
+        html.push('<ul style="margin: 2px 0 6px 18px; padding: 0; list-style-type: disc;">');
+        inList = true;
+      }
+      html.push(`<li style="margin-bottom: 2px; line-height: 1.45;">${formatInlineBold_(line.replace(/^[-*•]\s+/, ''))}</li>`);
+    } else {
+      closeList();
+      html.push(`<p style="margin: 0 0 5px; line-height: 1.48;">${formatInlineBold_(line)}</p>`);
+    }
+  }
+
+  closeList();
+  return html.join('');
+}
+
+function renderQRCodeSafe_(container, text, size = 100) {
+  if (!container) return;
+  container.innerHTML = '';
+  const holder = document.createElement('div');
+  holder.style.display = 'inline-block';
+  container.appendChild(holder);
+
+  new QRCode(holder, {
+    text: text,
+    width: size,
+    height: size,
+    correctLevel: QRCode.CorrectLevel.M
+  });
+
+  setTimeout(() => {
+    const canvas = holder.querySelector('canvas');
+    if (canvas) {
+      try {
+        const dataUrl = canvas.toDataURL('image/png');
+        const img = document.createElement('img');
+        img.src = dataUrl;
+        img.width = size;
+        img.height = size;
+        img.style.width = size + 'px';
+        img.style.height = size + 'px';
+        img.style.display = 'block';
+        holder.innerHTML = '';
+        holder.appendChild(img);
+      } catch (e) {}
+    }
+  }, 60);
+}
+
+function getActiveWebToken_() {
+  const inputEl = document.getElementById('page-tte-token-input');
+  const fromInput = inputEl ? inputEl.value.trim() : '';
+  const dispEl = document.getElementById('admin-token-display');
+  const fromDisp = dispEl ? dispEl.textContent.trim() : '';
+  const candidate = fromInput || currentActiveToken || (fromDisp !== '------' ? fromDisp : '');
+  return String(candidate || '').trim().toUpperCase();
 }
 
 async function refreshAdminQRToken() {
@@ -797,12 +1171,7 @@ async function refreshAdminQRToken() {
     if (tokenDisp) tokenDisp.textContent = res.token;
     if (cdDisp) cdDisp.textContent = res.secondsLeft;
     if (qrContainer) {
-      qrContainer.innerHTML = '';
-      new QRCode(qrContainer, {
-        text: `TOKEN TTE MUSAFA MOBILE: ${res.token}`,
-        width: 150,
-        height: 150
-      });
+      renderQRCodeSafe_(qrContainer, `TOKEN TTE MUSAFA MOBILE: ${res.token}`, 150);
     }
   } catch (err) {}
 }
@@ -813,24 +1182,58 @@ function fillActiveTokenToInput() {
   }
 }
 
+function formatDocTimestamp_(d) {
+  const dt = d instanceof Date ? d : new Date();
+  const dd = String(dt.getDate()).padStart(2, '0');
+  const mm = String(dt.getMonth() + 1).padStart(2, '0');
+  const yyyy = dt.getFullYear();
+  const hh = String(dt.getHours()).padStart(2, '0');
+  const min = String(dt.getMinutes()).padStart(2, '0');
+  const ss = String(dt.getSeconds()).padStart(2, '0');
+  return `${dd}/${mm}/${yyyy}, ${hh}.${min}.${ss} WIB`;
+}
+
 async function verifyTokenOnTTEPage() {
-  const tokenVal = document.getElementById('page-tte-token-input').value.trim();
+  const tokenVal = getActiveWebToken_();
   const errEl = document.getElementById('page-tte-error');
   const resBox = document.getElementById('page-tte-result');
   errEl.classList.add('hidden');
 
+  if (!tokenVal) {
+    verifiedTTEData = null;
+    resBox.classList.add('hidden');
+    errEl.textContent = 'Token TTE belum tersedia atau belum diisi.';
+    errEl.classList.remove('hidden');
+    return;
+  }
+
   try {
     const res = await callBackend('verifyTTEToken', { token: tokenVal }, 'POST');
     if (res && res.valid) {
-      verifiedTTEData = res;
-      document.getElementById('page-tte-signature-img').src = res.ttdUrl;
-      document.getElementById('tte-signer-name').textContent = res.signer || 'Muhammad Sufyan Fahriza';
-      document.getElementById('tte-signer-role').textContent = res.role || 'Eselon III (Pejabat Rohis)';
+      verifiedTTEData = {
+        ...res,
+        token: tokenVal,
+        signer: res.signer || 'Muhammad Sufyan Fahriza'
+      };
+      delete verifiedTTEData.role;
+
+      document.getElementById('tte-signer-name').textContent = verifiedTTEData.signer;
+      const tokenLabelEl = document.getElementById('tte-verified-token-label');
+      if (tokenLabelEl) tokenLabelEl.textContent = tokenVal;
       document.getElementById('tte-verified-time').textContent = 'Diverifikasi: ' + (res.verifiedAt || '');
+
       if (!document.getElementById('tte-doc-tanggal').value) {
-        document.getElementById('tte-doc-tanggal').value = new Date().toLocaleString('id-ID');
+        document.getElementById('tte-doc-tanggal').value = formatDocTimestamp_(new Date());
       }
+
       resBox.classList.remove('hidden');
+
+      const previewBox = document.getElementById('verified-qr-preview');
+      renderQRCodeSafe_(
+        previewBox,
+        `TTE MUSAFA MOBILE | Penandatangan: ${verifiedTTEData.signer} | Token: ${tokenVal}`,
+        104
+      );
     } else {
       verifiedTTEData = null;
       resBox.classList.add('hidden');
@@ -843,58 +1246,160 @@ async function verifyTokenOnTTEPage() {
   }
 }
 
-function downloadPDFWithVerifiedTTE() {
-  if (!verifiedTTEData || !verifiedTTEData.ttdUrl) {
-    alert('Verifikasi Token TTE terlebih dahulu agar tanda tangan muncul.');
+function generateDocNumber() {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  const rand = String(Math.floor(1000 + Math.random() * 9000));
+  return `NOT-${y}${m}${d}-${rand}`;
+}
+
+async function downloadPDFWithVerifiedTTE() {
+  if (!verifiedTTEData) {
+    alert('Verifikasi Token TTE terlebih dahulu agar pengesahan QR TTE muncul.');
     return;
   }
-  const judul = document.getElementById('tte-doc-judul').value.trim() || 'Dokumen Resmi MUSAFA Mobile';
-  const tgl = document.getElementById('tte-doc-tanggal').value.trim() || new Date().toLocaleDateString('id-ID');
-  const isi = document.getElementById('tte-doc-isi').value || '';
+
+  const noDokumen = generateDocNumber();
+  const judulKegiatan = (document.getElementById('tte-doc-judul').value || '').trim() || 'Notulensi Kegiatan';
+  const waktuCetak = (document.getElementById('tte-doc-tanggal').value || '').trim() || formatDocTimestamp_(new Date());
+  const isiNotulensi = document.getElementById('tte-doc-isi').value || '';
+  const tokenUsed = getActiveWebToken_() || verifiedTTEData.token || '-';
+  const signerName = verifiedTTEData.signer || 'Muhammad Sufyan Fahriza';
+
+  const qrPayload = `TTE MUSAFA MOBILE | ID: ${noDokumen} | Disahkan oleh: ${signerName} | TOKEN TTE VERIFIKASI: ${tokenUsed}`;
+  const qrSize = 88;
+  const tempQrDiv = document.createElement('div');
+  tempQrDiv.style.position = 'fixed';
+  tempQrDiv.style.left = '-9999px';
+  tempQrDiv.style.top = '0';
+  document.body.appendChild(tempQrDiv);
+
+  new QRCode(tempQrDiv, {
+    text: qrPayload,
+    width: qrSize,
+    height: qrSize,
+    correctLevel: QRCode.CorrectLevel.M
+  });
+
+  await new Promise((resolve) => setTimeout(resolve, 150));
+
+  let qrDataUrl = '';
+  const tempCanvas = tempQrDiv.querySelector('canvas');
+  const tempImg = tempQrDiv.querySelector('img');
+  if (tempCanvas) {
+    try {
+      qrDataUrl = tempCanvas.toDataURL('image/png');
+    } catch (e) {}
+  }
+  if (!qrDataUrl && tempImg && tempImg.src) {
+    qrDataUrl = tempImg.src;
+  }
+  tempQrDiv.remove();
+
+  const qrHtml = qrDataUrl
+    ? `<img src="${qrDataUrl}" alt="QR TTE" width="${qrSize}" height="${qrSize}" style="width:${qrSize}px;height:${qrSize}px;display:block;margin:4px auto;">`
+    : `<div style="width:${qrSize}px;height:${qrSize}px;line-height:${qrSize}px;border:1px solid #0f172a;font-size:10px;text-align:center;margin:4px auto;">${escapeHtml_(tokenUsed)}</div>`;
+
+  const bodyHtml = renderNotulensiBodyHtml_(isiNotulensi);
 
   const pdfContainer = document.getElementById('pdf-render-area');
   pdfContainer.classList.remove('hidden');
+  pdfContainer.style.display = 'block';
+  pdfContainer.style.position = 'static';
+  pdfContainer.style.visibility = 'visible';
+
   pdfContainer.innerHTML = `
-    <div style="padding: 35px; font-family: Arial, sans-serif; color: #111;">
-      <div style="display:flex; align-items:center; border-bottom: 3px solid #1e3a8a; padding-bottom: 12px; margin-bottom: 20px;">
-        <img src="https://drive.google.com/thumbnail?id=1v9XLw_NjWKP9zdtIgREkPYmgakhKMq_n&sz=w150" style="width:65px; height:65px; margin-right:15px;">
+    <div id="pdf-notulensi-sheet" style="width: 210mm; min-height: 297mm; padding: 14mm 16mm 16mm 16mm; font-family: 'Segoe UI', Arial, sans-serif; color: #0f172a; box-sizing: border-box; background: #ffffff;">
+
+      <!-- HEADER RESMI -->
+      <div style="display: flex; align-items: center; gap: 12px; padding-bottom: 8px; border-bottom: 2.5px solid #1e3a8a; margin-bottom: 12px;">
+        <img src="https://drive.google.com/thumbnail?id=1v9XLw_NjWKP9zdtIgREkPYmgakhKMq_n&sz=w150"
+             alt="Logo MUSAFA MOBILE"
+             crossorigin="anonymous"
+             onerror="this.style.display='none'"
+             style="width: 44px; height: 44px; object-fit: contain; border-radius: 8px; border: 1px solid #cbd5e1; padding: 2px; flex-shrink: 0;">
         <div>
-          <h2 style="margin:0; color:#1e3a8a; font-size:18px;">MUSAFA MOBILE</h2>
-          <p style="margin:2px 0 0; font-size:12px; color:#475569;">Sistem Managemen Agenda dan Tugas • Dokumen Bertanda Tangan Elektronik</p>
+          <div style="font-size: 13px; font-weight: 800; color: #0f172a; letter-spacing: 0.3px;">MUSAFA MOBILE - SISTEM MANAJEMEN AGENDA DAN TUGAS</div>
+          <div style="font-size: 10.5px; color: #475569; margin-top: 1px;">Dokumen Resmi Risalah Rapat & Notulensi Kegiatan Terverifikasi TTE</div>
         </div>
       </div>
-      <table style="width:100%; font-size:13px; margin-bottom:20px;">
-        <tr><td style="width:130px;"><strong>Perihal / Judul</strong></td><td>: ${judul}</td></tr>
-        <tr><td><strong>Tanggal</strong></td><td>: ${tgl}</td></tr>
+
+      <!-- JUDUL DOKUMEN -->
+      <div style="text-align: center; font-size: 15px; font-weight: 800; color: #0f172a; letter-spacing: 0.5px; margin-bottom: 10px;">
+        NOTULENSI / RISALAH KEGIATAN
+      </div>
+
+      <!-- METADATA DOKUMEN -->
+      <table style="width: 100%; border-collapse: collapse; font-size: 11px; line-height: 1.5; margin-bottom: 10px; border-bottom: 1px solid #cbd5e1; padding-bottom: 8px;">
+        <tr>
+          <td style="width: 110px; padding: 2px 0; font-weight: 700; color: #334155;">No. Dokumen</td>
+          <td style="width: 12px; padding: 2px 0; font-weight: 700;">:</td>
+          <td style="padding: 2px 0; font-family: monospace; font-weight: 700;">${escapeHtml_(noDokumen)}</td>
+        </tr>
+        <tr>
+          <td style="padding: 2px 0; font-weight: 700; color: #334155;">Judul Kegiatan</td>
+          <td style="padding: 2px 0; font-weight: 700;">:</td>
+          <td style="padding: 2px 0; font-weight: 700;">${escapeHtml_(judulKegiatan)}</td>
+        </tr>
+        <tr>
+          <td style="padding: 2px 0; font-weight: 700; color: #334155;">Waktu Cetak</td>
+          <td style="padding: 2px 0; font-weight: 700;">:</td>
+          <td style="padding: 2px 0;">${escapeHtml_(waktuCetak)}</td>
+        </tr>
       </table>
-      <div style="font-size:13px; line-height:1.6; white-space:pre-wrap; border:1px solid #cbd5e1; padding:15px; border-radius:8px; min-height:200px;">${isi}</div>
-      <div style="margin-top:36px; display:flex; justify-content:flex-end;">
-        <div style="text-align:center; width:250px;">
-          <p style="font-size:12px; margin-bottom:5px;">Disahkan secara elektronik oleh,</p>
-          <img src="${verifiedTTEData.ttdUrl}" style="height:85px; margin: 5px auto; display:block;">
-          <p style="font-size:13px; font-weight:bold; text-decoration:underline; margin:0;">${verifiedTTEData.signer || 'Muhammad Sufyan Fahriza'}</p>
-          <p style="font-size:11px; color:#475569; margin:2px 0 0;">${verifiedTTEData.role || 'Eselon III (Pejabat Rohis)'}</p>
+
+      <!-- ISI NOTULENSI -->
+      <div style="margin-bottom: 18px;">
+        <div style="font-size: 11.5px; font-weight: 800; color: #0f172a; margin-bottom: 6px;">Isi Notulensi:</div>
+        <div style="font-size: 11px; color: #1e293b;">${bodyHtml}</div>
+      </div>
+
+      <!-- PENGESAHAN TTE & TOKEN -->
+      <div style="margin-top: 18px; padding-top: 12px; border-top: 1px dashed #94a3b8; display: flex; justify-content: flex-end;">
+        <div style="width: 250px; text-align: center; font-size: 11px; line-height: 1.45;">
+          <div style="font-weight: 600; color: #334155;">Disahkan secara elektronik (TTE) oleh,</div>
+          ${qrHtml}
+          <div style="font-size: 12px; font-weight: 800; color: #0f172a; margin-top: 2px;">${escapeHtml_(signerName)}</div>
+          <div style="font-size: 10.5px; font-weight: 800; font-family: monospace; color: #1e3a8a; margin-top: 2px;">TOKEN TTE VERIFIKASI: ${escapeHtml_(tokenUsed)}</div>
         </div>
       </div>
+
+      <!-- FOOTER ID & VERIFIKASI -->
+      <div style="margin-top: 14px; padding-top: 6px; border-top: 1px solid #e2e8f0; font-size: 9.5px; color: #475569; text-align: center;">
+        ID: ${escapeHtml_(noDokumen)} | Verifikasi token pada menu TTE & Verifikasi QR di MUSAFA Mobile
+      </div>
+
     </div>
   `;
 
+  await new Promise((resolve) => setTimeout(resolve, 150));
+
+  const sheetEl = document.getElementById('pdf-notulensi-sheet') || pdfContainer;
   const opt = {
-    margin: 10,
-    filename: `TTE_${judul.replace(/\s+/g, '_')}.pdf`,
+    margin: 0,
+    filename: `Notulensi_${judulKegiatan.replace(/[^a-zA-Z0-9_-]+/g, '_')}_${noDokumen}.pdf`,
     image: { type: 'jpeg', quality: 0.98 },
-    html2canvas: { scale: 2, useCORS: true },
+    html2canvas: { scale: 2, useCORS: true, allowTaint: true, logging: false },
     jsPDF: { unit: 'mm', format: 'a4', orientation: 'portrait' }
   };
 
-  html2pdf().set(opt).from(pdfContainer).save().then(() => {
+  try {
+    await html2pdf().set(opt).from(sheetEl).save();
+  } finally {
     pdfContainer.classList.add('hidden');
-  });
+    pdfContainer.style.display = '';
+    pdfContainer.style.position = '';
+    pdfContainer.style.visibility = '';
+    pdfContainer.innerHTML = '';
+  }
 }
 
 // ==================== NOTIFIKASI GMAIL OTOMATIS & TES ====================
 function getTaskDisplayName(t) {
-  const detail = (t.DetailTugas || '').trim();
+  const parsed = parseTugasDetail(t.DetailTugas);
+  const detail = (parsed.deskripsi || parsed.pdfName || parsed.fotoName || parsed.driveLink || t.DetailTugas || '').trim();
   const mapel = (t.MataPelajaran || t.NamaMapel || '').trim();
   if (detail && mapel && !detail.toLowerCase().includes(mapel.toLowerCase())) {
     return `${detail} (${mapel})`;
@@ -918,7 +1423,7 @@ function populateNotifItemOptions() {
     return;
   }
 
-  selEl.innerHTML = items.map((nm, idx) => `<option value="${idx}">${nm}</option>`).join('');
+  selEl.innerHTML = items.map((nm, idx) => `<option value="${idx}">${escapeHtml_(nm)}</option>`).join('');
   nameEl.value = items[0];
 }
 
@@ -957,8 +1462,8 @@ function renderNotifTrackedSummary() {
   agendas.forEach(a => {
     html += `<div class="p-2.5 rounded-xl bg-blue-500/10 border border-blue-500/20">
       <div class="font-bold text-blue-600 dark:text-blue-400">[Agenda • 1 Jam Sebelumnya]</div>
-      <div class="font-semibold">${a.Judul || '-'}</div>
-      <div class="text-[11px] text-slate-500">${String(a.JatuhTempo || '').replace('T', ' ')}</div>
+      <div class="font-semibold">${escapeHtml_(a.Judul || '-')}</div>
+      <div class="text-[11px] text-slate-500">${escapeHtml_(String(a.JatuhTempo || '').replace('T', ' '))}</div>
     </div>`;
   });
 
@@ -966,8 +1471,8 @@ function renderNotifTrackedSummary() {
     const nm = getTaskDisplayName(t);
     html += `<div class="p-2.5 rounded-xl bg-rose-500/10 border border-rose-500/20">
       <div class="font-bold text-rose-600 dark:text-rose-400">[Tugas • 1 Hari Sebelumnya]</div>
-      <div class="font-semibold">${nm}</div>
-      <div class="text-[11px] text-slate-500">${String(t.Deadline || '').replace('T', ' ')}</div>
+      <div class="font-semibold">${escapeHtml_(nm)}</div>
+      <div class="text-[11px] text-slate-500">${escapeHtml_(String(t.Deadline || '').replace('T', ' '))}</div>
     </div>`;
   });
 
